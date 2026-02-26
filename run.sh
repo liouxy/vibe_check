@@ -9,6 +9,6 @@ fi
 
 
 # 或者指定单个文件
-python classify_sentiment.py \
-  -i inputs/your_comments.csv \
-  -o outputs/your_result.json
+/usr/local/bin/python3 classify_sentiment.py \
+  -i inputs/sample_comments.csv \
+  -o outputs/your_result.csv

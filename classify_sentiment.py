@@ -9,9 +9,10 @@ import csv
 import json
 import os
 import re
-import time
 from pathlib import Path
 from typing import Dict, Optional
+import pandas as pd
+
 
 try:
     from openai import OpenAI
@@ -134,8 +135,6 @@ class SentimentClassifier:
             
             # 尝试解析为JSON
             parsed_result = extract_json_from_llm(result)
-            if parsed_result is None:
-                parsed_result = {"raw_response": result}
             
             return {
                 "success": True,
@@ -231,15 +230,18 @@ class SentimentClassifier:
                     "error": "处理失败",
                     **{k: v for k, v in row.items() if k != comment_field}
                 }
-                self._save_to_cache(cache_path, item)
-                results.append(item)
+                # self._save_to_cache(cache_path, item)
+                # results.append(item)
         
         # 保存最终结果
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
+        # save csv with pandas
+
+        df = pd.DataFrame(results)
+        df.to_csv(output_file, index=False, encoding='utf-8-sig')
+
+
         
         print(f"\n处理完成! 结果已保存至: {output_file}")
         print(f"成功: {sum(1 for r in results if r.get('classification'))} 条")
