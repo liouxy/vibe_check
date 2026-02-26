@@ -207,31 +207,29 @@ class SentimentClassifier:
                     item = {
                         "index": idx,
                         "comment": comment,
-                        "classification": classification["result"],
                         "raw_response": classification["raw_response"],
                         **{k: v for k, v in row.items() if k != comment_field}
                     }
-                    
+                    item.update(classification["result"] or {})
                     # 保存到缓存
                     self._save_to_cache(cache_path, item)
                     results.append(item)
                     success = True
                     break
                 else:
-                    print(f"  错误: {classification['error']}")
+                    print(f"错误: {classification['error']}")
             
             if not success:
                 print(f"[{idx+1}/{total}] 处理失败，跳过")
-                # 仍然保存失败记录
                 item = {
                     "index": idx,
                     "comment": comment,
-                    "classification": None,
-                    "error": "处理失败",
+                    "raw_response": None,
+                    "error": "error!",
                     **{k: v for k, v in row.items() if k != comment_field}
                 }
                 # self._save_to_cache(cache_path, item)
-                # results.append(item)
+                results.append(item)
         
         # 保存最终结果
         output_path = Path(output_file)
@@ -244,8 +242,8 @@ class SentimentClassifier:
 
         
         print(f"\n处理完成! 结果已保存至: {output_file}")
-        print(f"成功: {sum(1 for r in results if r.get('classification'))} 条")
-        print(f"失败: {sum(1 for r in results if not r.get('classification'))} 条")
+        print(f"成功: {sum(1 for r in results if r.get('raw_response'))} 条")
+        print(f"失败: {sum(1 for r in results if not r.get('raw_response'))} 条")
 
 
 def main():
