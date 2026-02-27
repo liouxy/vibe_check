@@ -301,8 +301,8 @@ def main():
     parser.add_argument(
         '--model',
         type=str,
-        default='gpt-4o-mini',
-        help='使用的模型（默认: gpt-4o-mini）'
+        default=os.getenv('DEFAULT_MODEL', 'gpt-4o-mini'),
+        help='使用的模型（默认: gpt-4o-mini，支持环境变量 DEFAULT_MODEL）'
     )
     
     # Prompt配置
@@ -328,6 +328,7 @@ def main():
     )
     
     args = parser.parse_args()
+    print(args)
     
     # 检查API密钥
     if not args.api_key:

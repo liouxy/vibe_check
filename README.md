@@ -51,6 +51,27 @@ export OPENAI_API_KEY="your-api-key-here"
 
 ## 使用方法
 
+### 快速运行脚本（run.sh）
+
+`run.sh` 提供了一个最小可用的示例流程：读取 `.env` 中的环境变量（如 `OPENAI_API_KEY`），并运行一条示例命令。你可以直接运行它，或按需修改输入输出路径。
+
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+脚本内容等价于：
+
+```bash
+# 可选：加载 .env
+export $(cat .env | grep -v '^#' | xargs)
+
+# 运行示例
+python classify_sentiment.py \
+  -i inputs/sample_comments.csv \
+  -o outputs/your_result.csv
+```
+
 ### 基本用法
 
 ```bash
