@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
 评论情感分类工具
-支持批量处理CSV中的评论，调用OpenAI API进行情感分类，并支持断点续传
+支持批量处理JSONL中的评论，调用OpenAI API进行情感分类，并支持断点续传
 """
 
 import argparse
-import csv
 import json
 import os
 import re
@@ -48,7 +47,7 @@ def extract_json_from_llm(text):
         return json.loads(json_str)
     except json.JSONDecodeError as e:
         print(f"解析失败！原始文本: {text}")
-        return None
+        raise e
 
 
 class SentimentClassifier:
@@ -128,7 +127,7 @@ class SentimentClassifier:
                     {"role": "user", "content": comment}
                 ],
                 temperature=0,
-                max_tokens=1000
+                max_completion_tokens=2000
             )
             
             result = response.choices[0].message.content
@@ -149,7 +148,7 @@ class SentimentClassifier:
                 "result": None
             }
     
-    def process_csv(
+    def process_jsonl(
         self,
         input_file: str,
         output_file: str,
@@ -157,10 +156,10 @@ class SentimentClassifier:
         max_retries: int = 3
     ):
         """
-        处理CSV文件中的评论
+        处理JSONL文件中的评论
         
         Args:
-            input_file: 输入CSV文件路径
+            input_file: 输入JSONL文件路径
             output_file: 输出JSON文件路径
             comment_field: 评论字段名
             max_retries: 最大重试次数
@@ -174,10 +173,21 @@ class SentimentClassifier:
         cache = self._load_cache(cache_path)
         print(f"已加载缓存: {len(cache)} 条记录")
         
-        # 读取CSV
+        # 读取JSONL
+        rows = []
         with open(input_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            for line_no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                    if isinstance(row, dict):
+                        rows.append(row)
+                    else:
+                        print(f"第 {line_no} 行不是JSON对象，跳过")
+                except json.JSONDecodeError as e:
+                    print(f"第 {line_no} 行JSON解析失败，跳过: {e}")
         
         total = len(rows)
         print(f"总共 {total} 条评论需要处理")
@@ -218,7 +228,7 @@ class SentimentClassifier:
                     break
                 else:
                     print(f"错误: {classification['error']}")
-            
+
             if not success:
                 print(f"[{idx+1}/{total}] 处理失败，跳过")
                 item = {
@@ -253,14 +263,14 @@ def main():
         epilog="""
 示例:
   # 使用默认配置处理单个文件
-  python classify_sentiment.py -i inputs/comments.csv -o outputs/result.json
+    python classify_sentiment.py -i inputs/comments.jsonl -o outputs/result.json
   
   # 指定自定义prompt和模型
-  python classify_sentiment.py -i inputs/comments.csv -o outputs/result.json \\
+    python classify_sentiment.py -i inputs/comments.jsonl -o outputs/result.json \\
     --prompt prompts/custom.txt --model gpt-4o
   
   # 使用自定义endpoint
-  python classify_sentiment.py -i inputs/comments.csv -o outputs/result.json \\
+    python classify_sentiment.py -i inputs/comments.jsonl -o outputs/result.json \\
     --base-url https://api.example.com/v1 --api-key YOUR_KEY
         """
     )
@@ -270,7 +280,7 @@ def main():
         '-i', '--input',
         type=str,
         required=True,
-        help='输入CSV文件路径'
+        help='输入JSONL文件路径'
     )
     parser.add_argument(
         '-o', '--output',
@@ -282,7 +292,7 @@ def main():
         '--comment-field',
         type=str,
         default='comment',
-        help='CSV中评论字段名（默认: comment）'
+        help='JSONL中评论字段名（默认: comment）'
     )
     
     # API配置
@@ -349,7 +359,7 @@ def main():
         return 1
     
     # 处理文件
-    classifier.process_csv(
+    classifier.process_jsonl(
         input_file=args.input,
         output_file=args.output,
         comment_field=args.comment_field,
