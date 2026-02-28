@@ -9,7 +9,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import pandas as pd
 
 
@@ -152,7 +152,7 @@ class SentimentClassifier:
         self,
         input_file: str,
         output_file: str,
-        comment_field: str = "comment",
+        comment_fields: List[str] = ["comment"],
         max_retries: int = 3
     ):
         """
@@ -201,7 +201,7 @@ class SentimentClassifier:
                 results.append(cache[idx])
                 continue
             
-            comment = row.get(comment_field, "")
+            comment = " ".join([row.get(field, "") for field in comment_fields])
             if not comment.strip():
                 print(f"[{idx+1}/{total}] 评论为空，跳过")
                 continue
@@ -216,9 +216,8 @@ class SentimentClassifier:
                 if classification["success"]:
                     item = {
                         "index": idx,
-                        "comment": comment,
+                        **{k: v for k, v in row.items()},
                         "raw_response": classification["raw_response"],
-                        **{k: v for k, v in row.items() if k != comment_field}
                     }
                     item.update(classification["result"] or {})
                     # 保存到缓存
@@ -233,10 +232,9 @@ class SentimentClassifier:
                 print(f"[{idx+1}/{total}] 处理失败，跳过")
                 item = {
                     "index": idx,
-                    "comment": comment,
+                    **{k: v for k, v in row.items()},
                     "raw_response": None,
                     "error": "error!",
-                    **{k: v for k, v in row.items() if k != comment_field}
                 }
                 # self._save_to_cache(cache_path, item)
                 results.append(item)
@@ -289,10 +287,10 @@ def main():
         help='输出JSON文件路径'
     )
     parser.add_argument(
-        '--comment-field',
+        '--comment-fields',
         type=str,
         default='comment',
-        help='JSONL中评论字段名（默认: comment）'
+        help='JSONL中评论字段名，多个字段用逗号分隔（默认: comment）'
     )
     
     # API配置
@@ -327,8 +325,8 @@ def main():
     parser.add_argument(
         '--max-retries',
         type=int,
-        default=3,
-        help='最大重试次数（默认: 3）'
+        default=2,
+        help='最大重试次数（默认: 2）'
     )
     parser.add_argument(
         '--cache-dir',
@@ -362,7 +360,7 @@ def main():
     classifier.process_jsonl(
         input_file=args.input,
         output_file=args.output,
-        comment_field=args.comment_field,
+        comment_fields=args.comment_fields.split(','),
         max_retries=args.max_retries
     )
     
