@@ -10,7 +10,7 @@ fi
 
 # 或者指定单个文件
 /usr/local/bin/python3 classify_sentiment.py \
-  -i inputs/nintendo_submissions_sample30.jsonl \
+  -i inputs/nintendo_submissions_sample30.csv \
   -o outputs/nintendo_submissions_sample30.csv \
   --comment-fields title,selftext \
   --model gpt-5-mini
