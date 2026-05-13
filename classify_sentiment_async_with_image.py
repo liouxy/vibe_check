@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-评论情感分类工具（异步版）
+评论情感分类工具（异步版，支持图片 URL）
 支持批量处理 CSV 中的评论，调用 OpenAI API 进行情感分类，并支持断点续传。
 
 实现要点：
 1. 多 worker 并发请求模型
 2. 单 writer 串行写入 cache，保留原有 cache 追加语义
+3. 支持从 CSV 的图片 URL 列读取 URL 数组，并放入 user input
 """
 
 import argparse
@@ -17,7 +18,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -54,6 +55,8 @@ def extract_json_from_llm(text: str):
 class AsyncSentimentClassifier:
     """异步情感分类器。"""
 
+    CACHE_VARIANT = "image_input"
+
     def __init__(
         self,
         api_key: str,
@@ -80,19 +83,54 @@ class AsyncSentimentClassifier:
 
     def _get_cache_path(self, input_file: str) -> Path:
         input_name = Path(input_file).stem
+        cache_key = f"{self.CACHE_VARIANT}\n{self.user_prompt_prefix}"
         if not self.user_prompt_prefix:
-            return self.cache_dir / f"{input_name}_cache.jsonl"
+            variant_hash = hashlib.md5(cache_key.encode("utf-8")).hexdigest()[:8]
+            return self.cache_dir / f"{input_name}_{variant_hash}_cache.jsonl"
 
         prefix_hash = hashlib.md5(
-            self.user_prompt_prefix.encode("utf-8")
+            cache_key.encode("utf-8")
         ).hexdigest()[:8]
         return self.cache_dir / f"{input_name}_{prefix_hash}_cache.jsonl"
 
-    def _build_user_message(self, comment: str) -> str:
-        if not self.user_prompt_prefix:
-            return comment
+    def _parse_image_urls(self, raw_value: str) -> List[str]:
+        if not raw_value or not raw_value.strip():
+            return []
 
-        return f"{self.user_prompt_prefix}\n\n{comment}"
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "image_url 列必须是 JSON 数组字符串，例如: "
+                '["https://example.com/a.png", "https://example.com/b.png"]'
+            ) from exc
+
+        if not isinstance(parsed, list) or not all(isinstance(url, str) for url in parsed):
+            raise ValueError("image_url 列必须是字符串 URL 组成的 JSON 数组")
+
+        return parsed
+
+    def _build_user_message(
+        self,
+        comment: str,
+        image_urls: Optional[List[str]] = None,
+    ) -> Union[str, List[Dict[str, Any]]]:
+        text_content = comment
+        if self.user_prompt_prefix:
+            text_content = f"{self.user_prompt_prefix}\n\n{comment}"
+
+        if not image_urls:
+            return text_content
+
+        content: List[Dict[str, Any]] = [{"type": "text", "text": text_content}]
+        for url in image_urls:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": url},
+                }
+            )
+        return content
 
     def _load_cache(self, cache_path: Path) -> Dict[int, Dict]:
         cache: Dict[int, Dict] = {}
@@ -103,10 +141,14 @@ class AsyncSentimentClassifier:
                     cache[item["index"]] = item
         return cache
 
-    async def classify_comment(self, comment: str) -> Dict:
+    async def classify_comment(
+        self,
+        comment: str,
+        image_urls: Optional[List[str]] = None,
+    ) -> Dict:
         """对单条评论进行异步情感分类。"""
         try:
-            user_message = self._build_user_message(comment)
+            user_message = self._build_user_message(comment, image_urls=image_urls)
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -137,6 +179,7 @@ class AsyncSentimentClassifier:
         input_file: str,
         output_file: str,
         comment_fields: List[str],
+        image_url_field: str,
         max_retries: int = 3,
         workers: int = 8,
         requests_per_second: float = 5.0,
@@ -158,7 +201,7 @@ class AsyncSentimentClassifier:
         print(f"总共 {total} 条评论需要处理")
 
         results_by_index: Dict[int, Dict] = {}
-        jobs: List[Tuple[int, Dict, str]] = []
+        jobs: List[Tuple[int, Dict, str, List[str]]] = []
 
         for idx, row in enumerate(rows):
             if idx in cache:
@@ -167,11 +210,21 @@ class AsyncSentimentClassifier:
                 continue
 
             comment = " ".join([row.get(field, "") for field in comment_fields])
-            if not comment.strip():
-                print(f"[{idx + 1}/{total}] 评论为空，跳过")
+
+
+            try:
+                image_urls = self._parse_image_urls(row.get(image_url_field, ""))
+            except ValueError as exc:
+                print(f"[{idx + 1}/{total}] 图片 URL 列格式错误，跳过: {exc}")
+                results_by_index[idx] = {
+                    "index": idx,
+                    **{k: v for k, v in row.items()},
+                    "raw_response": None,
+                    "error": str(exc),
+                }
                 continue
 
-            jobs.append((idx, row, comment))
+            jobs.append((idx, row, comment, image_urls))
 
         print(f"待异步处理: {len(jobs)} 条，worker 数: {workers}")
 
@@ -189,7 +242,6 @@ class AsyncSentimentClassifier:
             await job_queue.put(None)
 
         async def writer_task():
-            # 单写者: 统一串行追加 cache，避免并发写冲突。
             with open(cache_path, "a", encoding="utf-8") as f:
                 while True:
                     item = await write_queue.get()
@@ -207,7 +259,7 @@ class AsyncSentimentClassifier:
                     job_queue.task_done()
                     break
 
-                idx, row, comment = job
+                idx, row, comment, image_urls = job
                 success = False
 
                 for retry in range(max_retries):
@@ -216,7 +268,6 @@ class AsyncSentimentClassifier:
                         f"(尝试 {retry + 1}/{max_retries})"
                     )
 
-                    # 全局限速: 所有 worker 合计每秒最多 N 次请求。
                     min_interval = 1.0 / requests_per_second
                     async with rate_lock:
                         now = time.monotonic()
@@ -225,7 +276,10 @@ class AsyncSentimentClassifier:
                             await asyncio.sleep(wait_time)
                         last_request_time["value"] = time.monotonic()
 
-                    classification = await self.classify_comment(comment)
+                    classification = await self.classify_comment(
+                        comment,
+                        image_urls=image_urls,
+                    )
 
                     if classification["success"]:
                         item = {
@@ -288,23 +342,19 @@ class AsyncSentimentClassifier:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="评论情感分类工具（异步版）",
+        description="评论情感分类工具（异步版，支持图片 URL）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   # 使用默认配置处理单个文件
-  python classify_sentiment_async.py -i inputs/comments.csv -o outputs/result.csv
+  python classify_sentiment_async_with_image.py -i inputs/comments.csv -o outputs/result.csv
+
+  # 指定图片 URL 列
+  python classify_sentiment_async_with_image.py -i inputs/comments.csv -o outputs/result.csv \
+    --image-url-field image_url
 
   # 指定并发 worker 数
-  python classify_sentiment_async.py -i inputs/comments.csv -o outputs/result.csv --workers 16
-
-  # 指定自定义 prompt 和模型
-  python classify_sentiment_async.py -i inputs/comments.csv -o outputs/result.csv \\
-    --prompt prompts/custom.txt --model gpt-4o
-
-  # 使用自定义 endpoint
-  python classify_sentiment_async.py -i inputs/comments.csv -o outputs/result.csv \\
-    --base-url https://api.example.com/v1 --api-key YOUR_KEY
+  python classify_sentiment_async_with_image.py -i inputs/comments.csv -o outputs/result.csv --workers 16
         """,
     )
 
@@ -315,6 +365,12 @@ def main():
         type=str,
         default="comment",
         help="CSV中评论字段名，多个字段用逗号分隔（默认: comment）",
+    )
+    parser.add_argument(
+        "--image-url-field",
+        type=str,
+        default="image_url",
+        help="CSV 中图片 URL 列名，列值需为 JSON 数组字符串（默认: image_url）",
     )
 
     parser.add_argument(
@@ -403,6 +459,7 @@ def main():
             input_file=args.input,
             output_file=args.output,
             comment_fields=args.comment_fields.split(","),
+            image_url_field=args.image_url_field,
             max_retries=args.max_retries,
             workers=args.workers,
             requests_per_second=args.requests_per_second,

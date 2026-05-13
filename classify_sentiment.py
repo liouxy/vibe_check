@@ -6,6 +6,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -60,6 +61,7 @@ class SentimentClassifier:
         base_url: Optional[str] = None,
         model: str = "gpt-4o-mini",
         system_prompt_path: str = "prompts/nintendo_comment_classify.txt",
+        user_prompt_prefix: str = "",
         cache_dir: str = "cache"
     ):
         """
@@ -78,6 +80,7 @@ class SentimentClassifier:
         )
         self.model = model
         self.system_prompt = self._load_system_prompt(system_prompt_path)
+        self.user_prompt_prefix = user_prompt_prefix.strip()
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         
@@ -93,7 +96,20 @@ class SentimentClassifier:
     def _get_cache_path(self, input_file: str) -> Path:
         """获取缓存文件路径"""
         input_name = Path(input_file).stem
-        return self.cache_dir / f"{input_name}_cache.jsonl"
+        if not self.user_prompt_prefix:
+            return self.cache_dir / f"{input_name}_cache.jsonl"
+
+        prefix_hash = hashlib.md5(
+            self.user_prompt_prefix.encode("utf-8")
+        ).hexdigest()[:8]
+        return self.cache_dir / f"{input_name}_{prefix_hash}_cache.jsonl"
+
+    def _build_user_message(self, comment: str) -> str:
+        """拼接 user prompt 的前缀和原始文本"""
+        if not self.user_prompt_prefix:
+            return comment
+
+        return f"{self.user_prompt_prefix}\n\n{comment}"
     
     def _load_cache(self, cache_path: Path) -> Dict[int, Dict]:
         """加载已处理的缓存"""
@@ -121,11 +137,12 @@ class SentimentClassifier:
             分类结果字典
         """
         try:
+            user_message = self._build_user_message(comment)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": comment}
+                    {"role": "user", "content": user_message}
                 ],
                 temperature=0,
                 max_completion_tokens=2000
@@ -310,6 +327,12 @@ def main():
         default='prompts/nintendo_comment_classify.txt',
         help='系统提示词文件路径（默认: prompts/nintendo_comment_classify.txt）'
     )
+    parser.add_argument(
+        '--user-prefix',
+        type=str,
+        default='',
+        help='追加到 user prompt 前面的上下文前缀，例如：这是用户的评论'
+    )
     
     # 处理配置
     parser.add_argument(
@@ -340,6 +363,7 @@ def main():
             base_url=args.base_url,
             model=args.model,
             system_prompt_path=args.prompt,
+            user_prompt_prefix=args.user_prefix,
             cache_dir=args.cache_dir
         )
     except FileNotFoundError as e:

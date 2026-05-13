@@ -91,6 +91,12 @@ python classify_sentiment.py \
   --prompt prompts/custom_prompt.txt \
   --model gpt-4o
 
+# 给 user prompt 增加上下文前缀
+python classify_sentiment.py \
+  -i inputs/comments.csv \
+  -o outputs/result.json \
+  --user-prefix "这是用户的评论"
+
 # 使用自定义 API endpoint
 python classify_sentiment.py \
   -i inputs/comments.csv \
@@ -114,6 +120,7 @@ python classify_sentiment.py --help
 | `--base-url` | API endpoint URL | 官方endpoint |
 | `--model` | 使用的模型 | `gpt-4o-mini` |
 | `--prompt` | 系统提示词文件路径 | `prompts/nintendo_comment_classify.txt` |
+| `--user-prefix` | user prompt 前缀，例如“这是用户与客服之间的对话” | 空 |
 | `--delay` | 请求间隔（秒） | `0.5` |
 | `--max-retries` | 最大重试次数 | `3` |
 | `--cache-dir` | 缓存目录 | `cache` |
@@ -190,6 +197,23 @@ python classify_sentiment.py \
   -i inputs/comments.csv \
   -o outputs/result.json \
   --prompt prompts/my_prompt.txt
+```
+
+如果只是想补充输入语境，而不改 system prompt，更适合用 `--user-prefix`：
+
+```bash
+python classify_sentiment.py \
+  -i inputs/comments.csv \
+  -o outputs/result.json \
+  --user-prefix "这是用户与客服之间的对话"
+```
+
+发送给模型的 user message 会变成：
+
+```text
+这是用户与客服之间的对话
+
+<原始评论或拼接后的字段内容>
 ```
 
 ## 注意事项
